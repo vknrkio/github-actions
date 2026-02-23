@@ -1,0 +1,64 @@
+name: Deploy to Infra
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      infra-path:
+        required: true
+        type: string
+        description: "Path in infra repo, e.g. k8s/apps/dev/proxy-gateway.yaml"
+      argocd-app:
+        required: false
+        type: string
+        description: "ArgoCD app name for summary"
+    secrets:
+      GH_APP_PRIVATE_KEY:
+        required: true
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.service-name }} to ${{ inputs.environment }}
+    runs-on: self-hosted
+    environment:
+      name: ${{ inputs.environment }}
+    steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: 2631429
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          repositories: projectx-infra
+
+      - name: Update Infra Repo
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          INFRA_PATH: ${{ inputs.infra-path }}
+          SERVICE_NAME: ${{ inputs.service-name }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          git clone https://x-access-token:${GH_TOKEN}@github.com/vknrkio/projectx-infra.git /tmp/infra
+          cd /tmp/infra
+          sed -i "s/targetRevision: .*/targetRevision: ${VERSION}/" "${INFRA_PATH}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "chore(${ENVIRONMENT}): bump ${SERVICE_NAME} to ${VERSION}"
+          for i in 1 2 3; do git push && break || git pull --rebase; done
+
+      - name: Summary
+        if: inputs.argocd-app != ''
+        run: |
+          echo "Deployed ${{ inputs.service-name }} version ${{ inputs.version }} to ${{ inputs.environment }}"
+          echo "Monitor: https://argocd.internal.vknrk.dev/applications/${{ inputs.argocd-app }}"
