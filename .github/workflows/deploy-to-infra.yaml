@@ -47,15 +47,27 @@ jobs:
           SERVICE_NAME: ${{ inputs.service-name }}
           ENVIRONMENT: ${{ inputs.environment }}
         run: |
-          git clone https://x-access-token:${GH_TOKEN}@github.com/vknrkio/projectx-infra.git /tmp/infra
-          cd /tmp/infra
+          INFRA_DIR=$(mktemp -d)
+          git clone https://x-access-token:${GH_TOKEN}@github.com/vknrkio/projectx-infra.git "${INFRA_DIR}"
+          cd "${INFRA_DIR}"
           sed -i "s/targetRevision: .*/targetRevision: ${VERSION}/" "${INFRA_PATH}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .
           git diff --cached --quiet && echo "No changes" && exit 0
           git commit -m "chore(${ENVIRONMENT}): bump ${SERVICE_NAME} to ${VERSION}"
-          for i in 1 2 3; do git push && break || git pull --rebase; done
+          for i in 1 2 3; do
+            echo "Push attempt ${i}/3..."
+            git push && break
+            if [ $i -lt 3 ]; then
+              echo "Push failed, rebasing and retrying in 5s..."
+              git pull --rebase || { echo "Rebase failed, aborting"; git rebase --abort; exit 1; }
+              sleep 5
+            else
+              echo "All push attempts failed"
+              exit 1
+            fi
+          done
 
       - name: Summary
         if: inputs.argocd-app != ''
